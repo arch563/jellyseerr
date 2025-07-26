@@ -41,6 +41,7 @@ import {
   MinusCircleIcon,
   PlayIcon,
   StarIcon,
+  TagIcon,
   TicketIcon,
 } from '@heroicons/react/24/outline';
 import {
@@ -106,6 +107,9 @@ const messages = defineMessages('components.MovieDetails', {
   watchlistError: 'Something went wrong. Please try again.',
   removefromwatchlist: 'Remove From Watchlist',
   addtowatchlist: 'Add To Watchlist',
+  addusertag: 'Add User Tag',
+  userTagSuccess: '<strong>{title}</strong> user tag added for <strong>{user}</strong> successfully!',
+  userTagError: 'Failed to add user tag. Please try again.',
 });
 
 interface MovieDetailsProps {
@@ -131,6 +135,7 @@ const MovieDetails = ({ movie }: MovieDetailsProps) => {
   const [isBlacklistUpdating, setIsBlacklistUpdating] =
     useState<boolean>(false);
   const [showBlacklistModal, setShowBlacklistModal] = useState(false);
+  const [isAddingUserTag, setIsAddingUserTag] = useState<boolean>(false);
   const { addToast } = useToasts();
 
   const {
@@ -217,7 +222,7 @@ const MovieDetails = ({ movie }: MovieDetailsProps) => {
     .pop();
   const trailerUrl =
     trailerVideo?.site === 'YouTube' &&
-    settings.currentSettings.youtubeUrl != ''
+      settings.currentSettings.youtubeUrl != ''
       ? `${settings.currentSettings.youtubeUrl}${trailerVideo?.key}`
       : trailerVideo?.url;
 
@@ -232,8 +237,8 @@ const MovieDetails = ({ movie }: MovieDetailsProps) => {
   const discoverRegion = user?.settings?.discoverRegion
     ? user.settings.discoverRegion
     : settings.currentSettings.discoverRegion
-    ? settings.currentSettings.discoverRegion
-    : 'US';
+      ? settings.currentSettings.discoverRegion
+      : 'US';
 
   const releases = data.releases.results.find(
     (r) => r.iso_3166_1 === discoverRegion
@@ -292,8 +297,8 @@ const MovieDetails = ({ movie }: MovieDetailsProps) => {
   const streamingRegion = user?.settings?.streamingRegion
     ? user.settings.streamingRegion
     : settings.currentSettings.streamingRegion
-    ? settings.currentSettings.streamingRegion
-    : 'US';
+      ? settings.currentSettings.streamingRegion
+      : 'US';
   const streamingProviders =
     data?.watchProviders?.find(
       (provider) => provider.iso_3166_1 === streamingRegion
@@ -426,8 +431,42 @@ const MovieDetails = ({ movie }: MovieDetailsProps) => {
   };
 
   const showHideButton = hasPermission([Permission.MANAGE_BLACKLIST], {
-    type: 'or',
+    type: 'and',
   });
+
+  const onClickAddUserTag = async (): Promise<void> => {
+    if (!data?.mediaInfo?.id || !user) {
+      return;
+    }
+
+    setIsAddingUserTag(true);
+
+    try {
+      await axios.post(`/api/v1/media/tag-user/${data.mediaInfo.id}`, {}, {
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+
+      addToast(
+        <span>
+          {intl.formatMessage(messages.userTagSuccess, {
+            title: movie?.title,
+            user: user.displayName,
+            strong: (msg: React.ReactNode) => <strong>{msg}</strong>,
+          })}
+        </span>,
+        { appearance: 'success', autoDismiss: true }
+      );
+    } catch (error) {
+      addToast(intl.formatMessage(messages.userTagError), {
+        appearance: 'error',
+        autoDismiss: true,
+      });
+    }
+
+    setIsAddingUserTag(false);
+  };
 
   return (
     <div
@@ -680,6 +719,26 @@ const MovieDetails = ({ movie }: MovieDetailsProps) => {
                 </Button>
               </Tooltip>
             )}
+          {/* Add User Tag Button */}
+          {user?.userType === UserType.JELLYFIN &&
+            user &&
+            data.mediaInfo &&
+            data.mediaInfo.status === MediaStatus.AVAILABLE && (
+              <Tooltip content={intl.formatMessage(messages.addusertag)}>
+                <Button
+                  buttonType="ghost"
+                  onClick={onClickAddUserTag}
+                  className="relative ml-2 first:ml-0"
+                  disabled={isAddingUserTag}
+                >
+                  {isAddingUserTag ? (
+                    <Spinner className="h-4 w-4" />
+                  ) : (
+                    <TagIcon className="!mr-0" />
+                  )}
+                </Button>
+              </Tooltip>
+            )}
         </div>
       </div>
       <div className="media-overview">
@@ -770,75 +829,75 @@ const MovieDetails = ({ movie }: MovieDetailsProps) => {
               (ratingData?.rt?.audienceRating &&
                 !!ratingData?.rt?.audienceScore) ||
               ratingData?.imdb?.criticsScore) && (
-              <div className="media-ratings">
-                {ratingData?.rt?.criticsRating &&
-                  typeof ratingData?.rt?.criticsScore === 'number' && (
-                    <Tooltip
-                      content={intl.formatMessage(messages.rtcriticsscore)}
-                    >
+                <div className="media-ratings">
+                  {ratingData?.rt?.criticsRating &&
+                    typeof ratingData?.rt?.criticsScore === 'number' && (
+                      <Tooltip
+                        content={intl.formatMessage(messages.rtcriticsscore)}
+                      >
+                        <a
+                          href={ratingData.rt.url}
+                          className="media-rating"
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          {ratingData.rt.criticsRating === 'Rotten' ? (
+                            <RTRotten className="w-6" />
+                          ) : (
+                            <RTFresh className="w-6" />
+                          )}
+                          <span>{ratingData.rt.criticsScore}%</span>
+                        </a>
+                      </Tooltip>
+                    )}
+                  {ratingData?.rt?.audienceRating &&
+                    !!ratingData?.rt?.audienceScore && (
+                      <Tooltip
+                        content={intl.formatMessage(messages.rtaudiencescore)}
+                      >
+                        <a
+                          href={ratingData.rt.url}
+                          className="media-rating"
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          {ratingData.rt.audienceRating === 'Spilled' ? (
+                            <RTAudRotten className="w-6" />
+                          ) : (
+                            <RTAudFresh className="w-6" />
+                          )}
+                          <span>{ratingData.rt.audienceScore}%</span>
+                        </a>
+                      </Tooltip>
+                    )}
+                  {ratingData?.imdb?.criticsScore && (
+                    <Tooltip content={intl.formatMessage(messages.imdbuserscore)}>
                       <a
-                        href={ratingData.rt.url}
+                        href={ratingData.imdb.url}
                         className="media-rating"
                         target="_blank"
                         rel="noreferrer"
                       >
-                        {ratingData.rt.criticsRating === 'Rotten' ? (
-                          <RTRotten className="w-6" />
-                        ) : (
-                          <RTFresh className="w-6" />
-                        )}
-                        <span>{ratingData.rt.criticsScore}%</span>
+                        <ImdbLogo className="mr-1 w-6" />
+                        <span>{ratingData.imdb.criticsScore}</span>
                       </a>
                     </Tooltip>
                   )}
-                {ratingData?.rt?.audienceRating &&
-                  !!ratingData?.rt?.audienceScore && (
-                    <Tooltip
-                      content={intl.formatMessage(messages.rtaudiencescore)}
-                    >
+                  {!!data.voteCount && (
+                    <Tooltip content={intl.formatMessage(messages.tmdbuserscore)}>
                       <a
-                        href={ratingData.rt.url}
+                        href={`https://www.themoviedb.org/movie/${data.id}?language=${locale}`}
                         className="media-rating"
                         target="_blank"
                         rel="noreferrer"
                       >
-                        {ratingData.rt.audienceRating === 'Spilled' ? (
-                          <RTAudRotten className="w-6" />
-                        ) : (
-                          <RTAudFresh className="w-6" />
-                        )}
-                        <span>{ratingData.rt.audienceScore}%</span>
+                        <TmdbLogo className="mr-1 w-6" />
+                        <span>{Math.round(data.voteAverage * 10)}%</span>
                       </a>
                     </Tooltip>
                   )}
-                {ratingData?.imdb?.criticsScore && (
-                  <Tooltip content={intl.formatMessage(messages.imdbuserscore)}>
-                    <a
-                      href={ratingData.imdb.url}
-                      className="media-rating"
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      <ImdbLogo className="mr-1 w-6" />
-                      <span>{ratingData.imdb.criticsScore}</span>
-                    </a>
-                  </Tooltip>
-                )}
-                {!!data.voteCount && (
-                  <Tooltip content={intl.formatMessage(messages.tmdbuserscore)}>
-                    <a
-                      href={`https://www.themoviedb.org/movie/${data.id}?language=${locale}`}
-                      className="media-rating"
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      <TmdbLogo className="mr-1 w-6" />
-                      <span>{Math.round(data.voteAverage * 10)}%</span>
-                    </a>
-                  </Tooltip>
-                )}
-              </div>
-            )}
+                </div>
+              )}
             {data.originalTitle &&
               data.originalLanguage !== locale.slice(0, 2) && (
                 <div className="media-fact">

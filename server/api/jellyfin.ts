@@ -109,6 +109,7 @@ export interface JellyfinLibraryItemExtended extends JellyfinLibraryItem {
   Height?: number;
   IsHD?: boolean;
   DateCreated?: string;
+  Tags?: string[];
 }
 
 export interface JellyfinItemsReponse {
@@ -354,10 +355,9 @@ class JellyfinAPI extends ExternalAPI {
           ? `/Items/Latest`
           : `/Users/${this.userId}/Items/Latest`;
       const itemResponse = await this.get<any>(
-        `${endpoint}?Limit=12&ParentId=${id}${
-          this.mediaServerType === MediaServerType.JELLYFIN
-            ? `&userId=${this.userId ?? 'Me'}`
-            : ''
+        `${endpoint}?Limit=12&ParentId=${id}${this.mediaServerType === MediaServerType.JELLYFIN
+          ? `&userId=${this.userId ?? 'Me'}`
+          : ''
         }`
       );
 
@@ -376,14 +376,34 @@ class JellyfinAPI extends ExternalAPI {
     id: string
   ): Promise<JellyfinLibraryItemExtended | undefined> {
     try {
-      const itemResponse = await this.get<JellyfinItemsReponse>(`/Items`, {
-        params: {
-          ids: id,
-          fields: 'ProviderIds,MediaSources,Width,Height,IsHD,DateCreated',
-        },
+      // Use the same endpoint as Jellyfin UI: /Users/{userId}/Items/{itemId}
+      // This matches exactly what the browser does when editing metadata
+      const endpoint = `/Users/${this.userId}/Items/${id}`;
+
+      logger.info('Making GET request to Jellyfin', {
+        label: 'Jellyfin API',
+        method: 'GET',
+        endpoint: endpoint,
+        itemId: id,
+        userId: this.userId,
+        baseUrl: this.axios.defaults.baseURL
       });
 
-      return itemResponse.Items?.[0];
+      const itemResponse = await this.get<JellyfinLibraryItemExtended>(endpoint);
+
+      logger.info('Retrieved item data using UI endpoint', {
+        label: 'Jellyfin API',
+        itemId: id,
+        userId: this.userId,
+        endpoint: endpoint,
+        hasData: !!itemResponse,
+        itemName: itemResponse?.Name,
+        responseKeys: itemResponse ? Object.keys(itemResponse).slice(0, 15) : [],
+        tagsCount: itemResponse?.Tags ? itemResponse.Tags.length : 0,
+        currentTags: itemResponse?.Tags || []
+      });
+
+      return itemResponse;
     } catch (e) {
       if (availabilitySync.running) {
         if (e.response?.status === 500) {
@@ -393,7 +413,7 @@ class JellyfinAPI extends ExternalAPI {
 
       logger.error(
         `Something went wrong while getting library content from the Jellyfin server: ${e.message}`,
-        { label: 'Jellyfin API', error: e.response?.status }
+        { label: 'Jellyfin API', error: e.response?.status, endpoint: `/Users/${this.userId}/Items/${id}` }
       );
       throw new ApiError(e.response?.status, ApiErrorCode.InvalidAuthToken);
     }
@@ -450,6 +470,76 @@ class JellyfinAPI extends ExternalAPI {
       );
 
       throw new ApiError(e.response?.status, ApiErrorCode.InvalidAuthToken);
+    }
+  }
+
+  public async updateItemMetadata(itemId: string, metadata: any): Promise<any> {
+    try {
+      const endpoint = `/Items/${itemId}`;
+      
+      logger.info('Making POST request to Jellyfin to update metadata', {
+        label: 'Jellyfin API',
+        method: 'POST',
+        endpoint: endpoint,
+        baseUrl: this.axios.defaults.baseURL,
+        itemId: itemId,
+        payloadSize: JSON.stringify(metadata).length,
+        payloadKeys: Object.keys(metadata).slice(0, 20),
+        tagsBeingSet: metadata.Tags || [],
+        itemName: metadata.Name,
+        userId: this.userId
+      });
+
+      // Log the complete payload structure (truncated for readability)
+      const payloadPreview = {
+        Id: metadata.Id,
+        Name: metadata.Name,
+        Tags: metadata.Tags,
+        TagsCount: metadata.Tags ? metadata.Tags.length : 0,
+        Overview: metadata.Overview ? `${metadata.Overview.substring(0, 100)}...` : undefined,
+        Genres: metadata.Genres,
+        People: metadata.People ? `${metadata.People.length} people` : undefined,
+        Studios: metadata.Studios ? `${metadata.Studios.length} studios` : undefined,
+        // Add key fields from browser payload
+        OfficialRating: metadata.OfficialRating,
+        PremiereDate: metadata.PremiereDate,
+        ProductionYear: metadata.ProductionYear,
+        LockData: metadata.LockData,
+        LockedFields: metadata.LockedFields
+      };
+
+      logger.info('Payload preview for Jellyfin POST request', {
+        label: 'Jellyfin API',
+        itemId: itemId,
+        payloadPreview: payloadPreview,
+        // Explicitly log tags for visibility
+        explicitTags: metadata.Tags || []
+      });
+
+      // Use the same endpoint as the Jellyfin UI: POST /Items/{itemId}
+      // This endpoint expects the complete item data, not just partial updates
+      const response = await this.post(endpoint, metadata);
+
+      logger.info('Successfully updated Jellyfin item metadata', {
+        label: 'Jellyfin API',
+        itemId: itemId,
+        endpoint: endpoint,
+        responseStatus: 'success'
+      });
+
+      return response;
+    } catch (e) {
+      logger.error('Failed to update item metadata in Jellyfin', {
+        label: 'Jellyfin API',
+        error: e.message,
+        itemId: itemId,
+        endpoint: `/Items/${itemId}`,
+        statusCode: e.response?.status,
+        responseData: e.response?.data,
+        baseUrl: this.axios.defaults.baseURL,
+        requestPayloadSize: JSON.stringify(metadata).length
+      });
+      throw e;
     }
   }
 }

@@ -44,6 +44,7 @@ import {
   MinusCircleIcon,
   PlayIcon,
   StarIcon,
+  TagIcon,
 } from '@heroicons/react/24/outline';
 import { ChevronDownIcon } from '@heroicons/react/24/solid';
 import type { RTRating } from '@server/api/rating/rottentomatoes';
@@ -105,6 +106,9 @@ const messages = defineMessages('components.TvDetails', {
   watchlistError: 'Something went wrong. Please try again.',
   removefromwatchlist: 'Remove From Watchlist',
   addtowatchlist: 'Add To Watchlist',
+  addusertag: 'Add User Tag',
+  userTagSuccess: '<strong>{title}</strong> user tag added for <strong>{user}</strong> successfully!',
+  userTagError: 'Failed to add user tag. Please try again.',
 });
 
 interface TvDetailsProps {
@@ -129,6 +133,7 @@ const TvDetails = ({ tv }: TvDetailsProps) => {
   const [isBlacklistUpdating, setIsBlacklistUpdating] =
     useState<boolean>(false);
   const [showBlacklistModal, setShowBlacklistModal] = useState(false);
+  const [isAddingUserTag, setIsAddingUserTag] = useState<boolean>(false);
   const { addToast } = useToasts();
 
   const {
@@ -214,7 +219,7 @@ const TvDetails = ({ tv }: TvDetailsProps) => {
     .pop();
   const trailerUrl =
     trailerVideo?.site === 'YouTube' &&
-    settings.currentSettings.youtubeUrl != ''
+      settings.currentSettings.youtubeUrl != ''
       ? `${settings.currentSettings.youtubeUrl}${trailerVideo?.key}`
       : trailerVideo?.url;
 
@@ -229,8 +234,8 @@ const TvDetails = ({ tv }: TvDetailsProps) => {
   const discoverRegion = user?.settings?.discoverRegion
     ? user.settings.discoverRegion
     : settings.currentSettings.discoverRegion
-    ? settings.currentSettings.discoverRegion
-    : 'US';
+      ? settings.currentSettings.discoverRegion
+      : 'US';
   const seriesAttributes: React.ReactNode[] = [];
 
   const contentRating = data.contentRatings.results.find(
@@ -296,7 +301,7 @@ const TvDetails = ({ tv }: TvDetailsProps) => {
         (season) =>
           (season[is4k ? 'status4k' : 'status'] === MediaStatus.AVAILABLE ||
             season[is4k ? 'status4k' : 'status'] ===
-              MediaStatus.PARTIALLY_AVAILABLE ||
+            MediaStatus.PARTIALLY_AVAILABLE ||
             season[is4k ? 'status4k' : 'status'] === MediaStatus.PROCESSING) &&
           !requestedSeasons.includes(season.seasonNumber)
       )
@@ -322,8 +327,8 @@ const TvDetails = ({ tv }: TvDetailsProps) => {
   const streamingRegion = user?.settings?.streamingRegion
     ? user.settings.streamingRegion
     : settings.currentSettings.streamingRegion
-    ? settings.currentSettings.streamingRegion
-    : 'US';
+      ? settings.currentSettings.streamingRegion
+      : 'US';
   const streamingProviders =
     data?.watchProviders?.find(
       (provider) => provider.iso_3166_1 === streamingRegion
@@ -462,6 +467,40 @@ const TvDetails = ({ tv }: TvDetailsProps) => {
   const showHideButton = hasPermission([Permission.MANAGE_BLACKLIST], {
     type: 'or',
   });
+
+  const onClickAddUserTag = async (): Promise<void> => {
+    if (!data?.mediaInfo?.id || !user) {
+      return;
+    }
+
+    setIsAddingUserTag(true);
+
+    try {
+      await axios.post(`/api/v1/media/tag-user/${data.mediaInfo.id}`, {}, {
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+
+      addToast(
+        <span>
+          {intl.formatMessage(messages.userTagSuccess, {
+            title: tv?.name,
+            user: user.displayName,
+            strong: (msg: React.ReactNode) => <strong>{msg}</strong>,
+          })}
+        </span>,
+        { appearance: 'success', autoDismiss: true }
+      );
+    } catch (error) {
+      addToast(intl.formatMessage(messages.userTagError), {
+        appearance: 'error',
+        autoDismiss: true,
+      });
+    }
+
+    setIsAddingUserTag(false);
+  };
 
   return (
     <div
@@ -677,7 +716,7 @@ const TvDetails = ({ tv }: TvDetailsProps) => {
               }) &&
               (data.mediaInfo?.status4k === MediaStatus.AVAILABLE ||
                 data?.mediaInfo?.status4k ===
-                  MediaStatus.PARTIALLY_AVAILABLE))) &&
+                MediaStatus.PARTIALLY_AVAILABLE))) &&
             hasPermission(
               [Permission.CREATE_ISSUES, Permission.MANAGE_ISSUES],
               {
@@ -721,6 +760,26 @@ const TvDetails = ({ tv }: TvDetailsProps) => {
               </Button>
             </Tooltip>
           )}
+          {/* Add User Tag Button */}
+          {user?.userType === UserType.JELLYFIN &&
+            user &&
+            data.mediaInfo &&
+            data.mediaInfo.status === MediaStatus.AVAILABLE && (
+              <Tooltip content={intl.formatMessage(messages.addusertag)}>
+                <Button
+                  buttonType="ghost"
+                  onClick={onClickAddUserTag}
+                  className="relative ml-2 first:ml-0"
+                  disabled={isAddingUserTag}
+                >
+                  {isAddingUserTag ? (
+                    <Spinner className="h-4 w-4" />
+                  ) : (
+                    <TagIcon className="!mr-0" />
+                  )}
+                </Button>
+              </Tooltip>
+            )}
         </div>
       </div>
       <div className="media-overview">
@@ -737,15 +796,15 @@ const TvDetails = ({ tv }: TvDetailsProps) => {
               <ul className="media-crew">
                 {(data.createdBy.length > 0
                   ? [
-                      ...data.createdBy.map(
-                        (person): Partial<Crew> => ({
-                          id: person.id,
-                          job: 'Creator',
-                          name: person.name,
-                        })
-                      ),
-                      ...sortedCrew,
-                    ]
+                    ...data.createdBy.map(
+                      (person): Partial<Crew> => ({
+                        id: person.id,
+                        job: 'Creator',
+                        name: person.name,
+                      })
+                    ),
+                    ...sortedCrew,
+                  ]
                   : sortedCrew
                 )
                   .slice(0, 6)
@@ -849,19 +908,18 @@ const TvDetails = ({ tv }: TvDetailsProps) => {
                     {({ open }) => (
                       <>
                         <Disclosure.Button
-                          className={`mt-2 flex w-full items-center justify-between space-x-2 border-gray-700 bg-gray-800 px-4 py-2 text-gray-200 ${
-                            open
+                          className={`mt-2 flex w-full items-center justify-between space-x-2 border-gray-700 bg-gray-800 px-4 py-2 text-gray-200 ${open
                               ? 'rounded-t-md border-t border-l border-r'
                               : 'rounded-md border'
-                          }`}
+                            }`}
                         >
                           <div className="flex flex-1 items-center space-x-2 text-lg">
                             <span>
                               {season.seasonNumber === 0
                                 ? intl.formatMessage(globalMessages.specials)
                                 : intl.formatMessage(messages.seasonnumber, {
-                                    seasonNumber: season.seasonNumber,
-                                  })}
+                                  seasonNumber: season.seasonNumber,
+                                })}
                             </span>
                             <Badge badgeType="dark">
                               {intl.formatMessage(messages.episodeCount, {
@@ -874,50 +932,50 @@ const TvDetails = ({ tv }: TvDetailsProps) => {
                             mSeason?.status === MediaStatus.PROCESSING ||
                             (request?.status === MediaRequestStatus.APPROVED &&
                               mSeason?.status === MediaStatus.DELETED)) && (
-                            <>
-                              <div className="hidden md:flex">
-                                <Badge badgeType="primary">
-                                  {intl.formatMessage(globalMessages.requested)}
-                                </Badge>
-                              </div>
-                              <div className="flex md:hidden">
-                                <StatusBadgeMini
-                                  status={MediaStatus.PROCESSING}
-                                />
-                              </div>
-                            </>
-                          )}
+                              <>
+                                <div className="hidden md:flex">
+                                  <Badge badgeType="primary">
+                                    {intl.formatMessage(globalMessages.requested)}
+                                  </Badge>
+                                </div>
+                                <div className="flex md:hidden">
+                                  <StatusBadgeMini
+                                    status={MediaStatus.PROCESSING}
+                                  />
+                                </div>
+                              </>
+                            )}
                           {((!mSeason &&
                             request?.status === MediaRequestStatus.PENDING) ||
                             mSeason?.status === MediaStatus.PENDING) && (
-                            <>
-                              <div className="hidden md:flex">
-                                <Badge badgeType="warning">
-                                  {intl.formatMessage(globalMessages.pending)}
-                                </Badge>
-                              </div>
-                              <div className="flex md:hidden">
-                                <StatusBadgeMini status={MediaStatus.PENDING} />
-                              </div>
-                            </>
-                          )}
+                              <>
+                                <div className="hidden md:flex">
+                                  <Badge badgeType="warning">
+                                    {intl.formatMessage(globalMessages.pending)}
+                                  </Badge>
+                                </div>
+                                <div className="flex md:hidden">
+                                  <StatusBadgeMini status={MediaStatus.PENDING} />
+                                </div>
+                              </>
+                            )}
                           {mSeason?.status ===
                             MediaStatus.PARTIALLY_AVAILABLE && (
-                            <>
-                              <div className="hidden md:flex">
-                                <Badge badgeType="success">
-                                  {intl.formatMessage(
-                                    globalMessages.partiallyavailable
-                                  )}
-                                </Badge>
-                              </div>
-                              <div className="flex md:hidden">
-                                <StatusBadgeMini
-                                  status={MediaStatus.PARTIALLY_AVAILABLE}
-                                />
-                              </div>
-                            </>
-                          )}
+                              <>
+                                <div className="hidden md:flex">
+                                  <Badge badgeType="success">
+                                    {intl.formatMessage(
+                                      globalMessages.partiallyavailable
+                                    )}
+                                  </Badge>
+                                </div>
+                                <div className="flex md:hidden">
+                                  <StatusBadgeMini
+                                    status={MediaStatus.PARTIALLY_AVAILABLE}
+                                  />
+                                </div>
+                              </>
+                            )}
                           {mSeason?.status === MediaStatus.AVAILABLE && (
                             <>
                               <div className="hidden md:flex">
@@ -949,7 +1007,7 @@ const TvDetails = ({ tv }: TvDetailsProps) => {
                             )}
                           {((!mSeason4k &&
                             request4k?.status ===
-                              MediaRequestStatus.APPROVED) ||
+                            MediaRequestStatus.APPROVED) ||
                             mSeason4k?.status4k === MediaStatus.PROCESSING ||
                             (request4k?.status ===
                               MediaRequestStatus.APPROVED &&
@@ -1058,9 +1116,8 @@ const TvDetails = ({ tv }: TvDetailsProps) => {
                               </>
                             )}
                           <ChevronDownIcon
-                            className={`${
-                              open ? 'rotate-180' : ''
-                            } h-6 w-6 text-gray-500`}
+                            className={`${open ? 'rotate-180' : ''
+                              } h-6 w-6 text-gray-500`}
                           />
                         </Disclosure.Button>
                         <Transition
@@ -1093,60 +1150,60 @@ const TvDetails = ({ tv }: TvDetailsProps) => {
             {(!!data.voteCount ||
               (ratingData?.criticsRating && !!ratingData?.criticsScore) ||
               (ratingData?.audienceRating && !!ratingData?.audienceScore)) && (
-              <div className="media-ratings">
-                {ratingData?.criticsRating && !!ratingData?.criticsScore && (
-                  <Tooltip
-                    content={intl.formatMessage(messages.rtcriticsscore)}
-                  >
-                    <a
-                      href={ratingData.url}
-                      className="media-rating"
-                      target="_blank"
-                      rel="noreferrer"
+                <div className="media-ratings">
+                  {ratingData?.criticsRating && !!ratingData?.criticsScore && (
+                    <Tooltip
+                      content={intl.formatMessage(messages.rtcriticsscore)}
                     >
-                      {ratingData.criticsRating === 'Rotten' ? (
-                        <RTRotten className="mr-1 w-6" />
-                      ) : (
-                        <RTFresh className="mr-1 w-6" />
-                      )}
-                      <span>{ratingData.criticsScore}%</span>
-                    </a>
-                  </Tooltip>
-                )}
-                {ratingData?.audienceRating && !!ratingData?.audienceScore && (
-                  <Tooltip
-                    content={intl.formatMessage(messages.rtaudiencescore)}
-                  >
-                    <a
-                      href={ratingData.url}
-                      className="media-rating"
-                      target="_blank"
-                      rel="noreferrer"
+                      <a
+                        href={ratingData.url}
+                        className="media-rating"
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        {ratingData.criticsRating === 'Rotten' ? (
+                          <RTRotten className="mr-1 w-6" />
+                        ) : (
+                          <RTFresh className="mr-1 w-6" />
+                        )}
+                        <span>{ratingData.criticsScore}%</span>
+                      </a>
+                    </Tooltip>
+                  )}
+                  {ratingData?.audienceRating && !!ratingData?.audienceScore && (
+                    <Tooltip
+                      content={intl.formatMessage(messages.rtaudiencescore)}
                     >
-                      {ratingData.audienceRating === 'Spilled' ? (
-                        <RTAudRotten className="mr-1 w-6" />
-                      ) : (
-                        <RTAudFresh className="mr-1 w-6" />
-                      )}
-                      <span>{ratingData.audienceScore}%</span>
-                    </a>
-                  </Tooltip>
-                )}
-                {!!data.voteCount && (
-                  <Tooltip content={intl.formatMessage(messages.tmdbuserscore)}>
-                    <a
-                      href={`https://www.themoviedb.org/tv/${data.id}?language=${locale}`}
-                      className="media-rating"
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      <TmdbLogo className="mr-1 w-6" />
-                      <span>{Math.round(data.voteAverage * 10)}%</span>
-                    </a>
-                  </Tooltip>
-                )}
-              </div>
-            )}
+                      <a
+                        href={ratingData.url}
+                        className="media-rating"
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        {ratingData.audienceRating === 'Spilled' ? (
+                          <RTAudRotten className="mr-1 w-6" />
+                        ) : (
+                          <RTAudFresh className="mr-1 w-6" />
+                        )}
+                        <span>{ratingData.audienceScore}%</span>
+                      </a>
+                    </Tooltip>
+                  )}
+                  {!!data.voteCount && (
+                    <Tooltip content={intl.formatMessage(messages.tmdbuserscore)}>
+                      <a
+                        href={`https://www.themoviedb.org/tv/${data.id}?language=${locale}`}
+                        className="media-rating"
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        <TmdbLogo className="mr-1 w-6" />
+                        <span>{Math.round(data.voteAverage * 10)}%</span>
+                      </a>
+                    </Tooltip>
+                  )}
+                </div>
+              )}
             {data.originalName &&
               data.originalLanguage !== locale.slice(0, 2) && (
                 <div className="media-fact">
@@ -1157,13 +1214,13 @@ const TvDetails = ({ tv }: TvDetailsProps) => {
             {data.keywords.some(
               (keyword) => keyword.id === ANIME_KEYWORD_ID
             ) && (
-              <div className="media-fact">
-                <span>{intl.formatMessage(messages.showtype)}</span>
-                <span className="media-fact-value">
-                  {intl.formatMessage(messages.anime)}
-                </span>
-              </div>
-            )}
+                <div className="media-fact">
+                  <span>{intl.formatMessage(messages.showtype)}</span>
+                  <span className="media-fact-value">
+                    {intl.formatMessage(messages.anime)}
+                  </span>
+                </div>
+              )}
             <div className="media-fact">
               <span>{intl.formatMessage(globalMessages.status)}</span>
               <span className="media-fact-value">{data.status}</span>

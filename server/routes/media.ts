@@ -2,7 +2,10 @@ import RadarrAPI from '@server/api/servarr/radarr';
 import SonarrAPI from '@server/api/servarr/sonarr';
 import TautulliAPI from '@server/api/tautulli';
 import TheMovieDb from '@server/api/themoviedb';
+import JellyfinAPI from '@server/api/jellyfin';
 import { MediaStatus, MediaType } from '@server/constants/media';
+import { MediaServerType } from '@server/constants/server';
+import { UserType } from '@server/constants/user';
 import { getRepository } from '@server/datasource';
 import Media from '@server/entity/Media';
 import Season from '@server/entity/Season';
@@ -18,6 +21,7 @@ import { isAuthenticated } from '@server/middleware/auth';
 import { Router } from 'express';
 import type { FindOneOptions } from 'typeorm';
 import { In } from 'typeorm';
+import { getHostname } from '@server/utils/getHostname';
 
 const mediaRoutes = Router();
 
@@ -90,6 +94,267 @@ mediaRoutes.get('/', async (req, res, next) => {
     next({ status: 500, message: e.message });
   }
 });
+
+/**
+ * Add current user's metadata to a media item in Jellyfin
+ * POST /api/v1/media/tag-user/:id
+ */
+mediaRoutes.post(
+  '/tag-user/:id',
+  isAuthenticated(),
+  async (req, res, next) => {
+    try {
+      logger.info('Add user tag endpoint called', {
+        label: 'API',
+        mediaId: req.params.id,
+        userId: req.user?.id,
+        method: req.method,
+        url: req.url
+      });
+
+      const settings = getSettings();
+      const mediaRepository = getRepository(Media);
+      const userRepository = getRepository(User);
+
+      // Check if Jellyfin is configured
+      logger.info('Checking media server type', {
+        label: 'API',
+        mediaServerType: settings.main.mediaServerType,
+        expectedTypes: [MediaServerType.JELLYFIN, MediaServerType.EMBY]
+      });
+
+      if (settings.main.mediaServerType !== MediaServerType.JELLYFIN &&
+        settings.main.mediaServerType !== MediaServerType.EMBY) {
+        logger.warn('Media server type not supported for user tags', {
+          label: 'API',
+          mediaServerType: settings.main.mediaServerType
+        });
+        return res.status(400).json({
+          message: 'This feature is only available with Jellyfin/Emby media servers.'
+        });
+      }
+
+      // Get the requesting user
+      const user = await userRepository.findOne({
+        where: { id: req.user?.id },
+        select: ['id', 'jellyfinUserId', 'jellyfinUsername', 'userType', 'username', 'plexUsername', 'email']
+      });
+
+      logger.info('User query result', {
+        label: 'API',
+        userId: req.user?.id,
+        userFound: !!user,
+        userDetails: user ? {
+          id: user.id,
+          userType: user.userType,
+          jellyfinUserId: user.jellyfinUserId,
+          hasJellyfinUsername: !!user.jellyfinUsername
+        } : null
+      });
+
+      if (!user) {
+        logger.warn('User not found', { label: 'API', userId: req.user?.id });
+        return res.status(404).json({ message: 'User not found.' });
+      }
+
+      // Check if user is linked to Jellyfin/Emby
+      logger.info('Checking user type and Jellyfin linking', {
+        label: 'API',
+        userType: user.userType,
+        expectedTypes: [UserType.JELLYFIN, UserType.EMBY],
+        jellyfinUserId: user.jellyfinUserId,
+        hasJellyfinUserId: !!user.jellyfinUserId
+      });
+
+      if ((user.userType !== UserType.JELLYFIN && user.userType !== UserType.EMBY) || !user.jellyfinUserId) {
+        logger.warn('User not linked to Jellyfin/Emby', {
+          label: 'API',
+          userType: user.userType,
+          jellyfinUserId: user.jellyfinUserId
+        });
+        return res.status(400).json({
+          message: 'User must be linked to Jellyfin/Emby to use this feature.'
+        });
+      }
+
+      // Get the media item
+      logger.info('Querying media item', {
+        label: 'API',
+        mediaId: req.params.id,
+        mediaIdParsed: Number(req.params.id)
+      });
+
+      const media = await mediaRepository.findOne({
+        where: { id: Number(req.params.id) }
+      });
+
+      logger.info('Media query result', {
+        label: 'API',
+        mediaId: req.params.id,
+        mediaFound: !!media,
+        status: media?.status,
+        status4k: media?.status4k
+      });
+
+      if (!media) {
+        logger.warn('Media not found', { label: 'API', mediaId: req.params.id });
+        return res.status(404).json({ message: 'Media not found.' });
+      }
+
+      // Check if media is available (in library)
+      if (media.status !== MediaStatus.AVAILABLE && media.status4k !== MediaStatus.AVAILABLE) {
+        logger.warn('Media not available in library', {
+          label: 'API',
+          mediaId: media.id,
+          status: media.status,
+          status4k: media.status4k
+        });
+        return res.status(400).json({
+          message: 'This feature is only available for media that exists in your library.'
+        });
+      }
+
+      // Get admin user for Jellyfin API
+      const admin = await userRepository.findOne({
+        where: { id: 1 },
+        select: ['id', 'jellyfinDeviceId', 'jellyfinUserId']
+      });
+
+      if (!admin) {
+        return res.status(500).json({ message: 'Admin user not found.' });
+      }
+
+      // Initialize Jellyfin API client
+      const jellyfinClient = new JellyfinAPI(
+        getHostname(),
+        settings.jellyfin.apiKey,
+        admin.jellyfinDeviceId ?? ''
+      );
+      jellyfinClient.setUserId(admin.jellyfinUserId ?? '');
+
+      // Determine which Jellyfin media item to tag
+      const jellyfinMediaId = media.jellyfinMediaId || media.jellyfinMediaId4k;
+
+      if (!jellyfinMediaId) {
+        return res.status(400).json({
+          message: 'Media is not available in Jellyfin/Emby yet.'
+        });
+      }
+
+      // Create user-specific tags for Jellyfin's filtering functionality
+      const userTag = `jellyseerr-user-${user.jellyfinUserId}`;
+      const displayName = user.username || user.plexUsername || user.jellyfinUsername || user.email;
+      const userDisplayTag = `User: ${displayName}`;
+
+      try {
+        // Get the complete item data from Jellyfin (same as UI does)
+        const itemData = await jellyfinClient.getItemData(jellyfinMediaId);
+
+        if (!itemData) {
+          return res.status(404).json({
+            message: 'Media item not found in Jellyfin/Emby.'
+          });
+        }
+
+        logger.info('Current item data retrieved from Jellyfin', {
+          label: 'Media User Tag',
+          itemId: jellyfinMediaId,
+          currentTags: itemData.Tags || [],
+          itemName: itemData.Name
+        });
+
+        // Get existing tags and add our user tag if it doesn't exist
+        const existingTags = itemData.Tags || [];
+        const newUserTag = userDisplayTag; // Use the display version: "User: John Doe"
+
+        if (!existingTags.includes(newUserTag)) {
+          const updatedTags = [...existingTags, newUserTag];
+
+          // Update the complete item data with new tags - exactly like Jellyfin UI
+          const updatedItemData = {
+            ...itemData,
+            Tags: updatedTags
+          };
+
+          logger.info('Updating Jellyfin item with new tag (full item approach)', {
+            label: 'Media User Tag',
+            itemId: jellyfinMediaId,
+            oldTags: existingTags,
+            newTags: updatedTags,
+            userTag: newUserTag,
+            itemName: itemData.Name,
+            payloadSize: JSON.stringify(updatedItemData).length,
+            payloadKeys: Object.keys(updatedItemData).slice(0, 10), // Show first 10 keys
+            endpoint: `/Items/${jellyfinMediaId}`,
+            method: 'POST',
+            userId: admin.jellyfinUserId
+          });
+
+          // POST the complete item data back to Jellyfin (same as UI)
+          await jellyfinClient.updateItemMetadata(jellyfinMediaId, updatedItemData);
+
+          logger.info('Successfully updated Jellyfin item metadata with full item approach', {
+            label: 'Media User Tag',
+            userId: user.id,
+            jellyfinUserId: user.jellyfinUserId,
+            mediaId: media.id,
+            jellyfinMediaId: jellyfinMediaId,
+            addedTag: newUserTag
+          });
+
+          return res.status(200).json({
+            message: 'User metadata tag added successfully to Jellyfin library.',
+            tag: userTag,
+            displayTag: userDisplayTag,
+            jellyfinUserId: user.jellyfinUserId,
+            mediaId: media.id,
+            jellyfinMediaId: jellyfinMediaId,
+            addedToLibrary: true
+          });
+        } else {
+          logger.info('User tag already exists on media item', {
+            label: 'Media User Tag',
+            userId: user.id,
+            mediaId: media.id,
+            existingTag: newUserTag
+          });
+
+          return res.status(200).json({
+            message: 'User metadata tag already exists on this media item.',
+            tag: userTag,
+            displayTag: userDisplayTag,
+            jellyfinUserId: user.jellyfinUserId,
+            mediaId: media.id,
+            jellyfinMediaId: jellyfinMediaId,
+            addedToLibrary: false
+          });
+        }
+
+      } catch (error) {
+        logger.error('Failed to process user tag request', {
+          label: 'Media User Tag',
+          error: error.message,
+          userId: user.id,
+          mediaId: media.id
+        });
+
+        return res.status(500).json({
+          message: 'Failed to add user metadata tag.'
+        });
+      }
+
+    } catch (error) {
+      logger.error('Error in add user tag endpoint', {
+        label: 'API',
+        error: error.message
+      });
+      return next({
+        status: 500,
+        message: 'Internal server error.'
+      });
+    }
+  }
+);
 
 mediaRoutes.post<
   {
@@ -227,10 +492,8 @@ mediaRoutes.delete(
       }
       if (!serviceSettings) {
         logger.warn(
-          `There is no default ${
-            is4k ? '4K ' : '' + isMovie ? 'Radarr' : 'Sonarr'
-          }/ server configured. Did you set any of your ${
-            is4k ? '4K ' : '' + isMovie ? 'Radarr' : 'Sonarr'
+          `There is no default ${is4k ? '4K ' : '' + isMovie ? 'Radarr' : 'Sonarr'
+          }/ server configured. Did you set any of your ${is4k ? '4K ' : '' + isMovie ? 'Radarr' : 'Sonarr'
           } servers as default?`,
           {
             label: 'Media Request',

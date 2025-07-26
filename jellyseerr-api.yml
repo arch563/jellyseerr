@@ -6602,6 +6602,54 @@ paths:
       responses:
         '204':
           description: Succesfully removed media item
+  /media/tag-user/{mediaId}:
+    post:
+      summary: Add user metadata tag to media
+      description: |
+        Adds the current user's metadata to a media item in Jellyfin/Emby.
+        Only available for Jellyfin/Emby users on requested media.
+      tags:
+        - media
+      parameters:
+        - in: path
+          name: mediaId
+          description: Media ID
+          required: true
+          example: '1'
+          schema:
+            type: string
+      responses:
+        '200':
+          description: User tag added successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "User metadata tag request processed successfully."
+                  tag:
+                    type: string
+                    example: "jellyseerr-user-12345"
+                  displayTag:
+                    type: string
+                    example: "User: John Doe"
+                  jellyfinUserId:
+                    type: string
+                    example: "12345"
+                  mediaId:
+                    type: number
+                    example: 1
+                  jellyfinMediaId:
+                    type: string
+                    example: "abc123"
+        '400':
+          description: Bad request (user not linked to Jellyfin/Emby, media not requested, etc.)
+        '404':
+          description: Media or user not found
+        '500':
+          description: Internal server error
   /media/{mediaId}/{status}:
     post:
       summary: Update media status
